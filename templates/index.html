@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+  <div class="row g-4">
+
+    <!-- ── LEFT: Hero + Mode Cards ─────────────────────────────── -->
+    <div class="col-lg-8">
+
+      <!-- Hero -->
+      <div class="fade-up" style="padding: 2.5rem 0 2rem;">
+        <div style="font-family:var(--font-mono);font-size:0.72rem;color:var(--accent);
+                    letter-spacing:0.12em;text-transform:uppercase;margin-bottom:0.6rem;">
+          <i class="bi bi-circle-fill me-1" style="font-size:0.45rem;"></i>
+          Advanced DIP Platform &nbsp;·&nbsp; Circular ROI Detection
+        </div>
+        <h1 style="font-family:var(--font-display);font-size:clamp(2rem,4vw,3rem);
+                   font-weight:800;letter-spacing:-0.04em;line-height:1.1;
+                   background:linear-gradient(135deg, #e2e8f0 40%, #38bdf8);
+                   -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+          Detect Microplastics<br>in Water Samples
+        </h1>
+        <p style="color:var(--text-muted);font-size:1rem;margin-top:1rem;max-width:540px;line-height:1.65;">
+          Upload microscopic water sample images (petri dish style). MicroScan automatically
+          detects the circular dish region, applies a full digital image processing pipeline,
+          and identifies, classifies, and quantifies microplastic particles.
+        </p>
+      </div>
+
+      <!-- Mode Cards -->
+      <div class="row g-3 fade-up fade-up-d1">
+
+        <!-- Single Image -->
+        <div class="col-md-6">
+          <a href="{{ url_for('single') }}" style="text-decoration:none;">
+            <div class="card-dark card-glow" style="height:100%;cursor:pointer;
+                 border-color:rgba(56,189,248,0.2);transition:all 0.25s;position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;right:0;width:120px;height:120px;
+                          background:radial-gradient(circle, rgba(56,189,248,0.12), transparent 70%);
+                          border-radius:0 16px 0 0;pointer-events:none;"></div>
+              <div style="font-size:2rem;color:var(--accent);margin-bottom:0.9rem;">
+                <i class="bi bi-image-fill"></i>
+              </div>
+              <div style="font-family:var(--font-display);font-size:1.25rem;font-weight:800;
+                           letter-spacing:-0.02em;color:var(--text);margin-bottom:0.4rem;">
+                Single Image
+              </div>
+              <p style="color:var(--text-muted);font-size:0.85rem;line-height:1.6;">
+                Upload one image and get a full DIP analysis with step-by-step visualisation,
+                classification breakdown, and contamination scoring.
+              </p>
+              <div style="margin-top:1.2rem;display:flex;align-items:center;gap:0.4rem;
+                          color:var(--accent);font-size:0.8rem;font-weight:600;">
+                Analyse now <i class="bi bi-arrow-right"></i>
+              </div>
+            </div>
+          </a>
+        </div>
+
+        <!-- Dashboard -->
+        <div class="col-12">
+          <a href="{{ url_for('dashboard') }}" style="text-decoration:none;">
+            <div class="card-dark" style="display:flex;align-items:center;gap:1.5rem;
+                 border-color:rgba(34,197,94,0.15);transition:all 0.25s;cursor:pointer;">
+              <div style="font-size:1.8rem;color:var(--green);flex-shrink:0;">
+                <i class="bi bi-grid-3x3-gap-fill"></i>
+              </div>
+              <div>
+                <div style="font-weight:700;font-size:1rem;color:var(--text);">
+                  Dashboard &amp; History
+                </div>
+                <div style="color:var(--text-muted);font-size:0.82rem;">
+                  View all past analyses from this session, re-examine results, and download reports.
+                  &nbsp;
+                  {% if history_count %}
+                    <span style="color:var(--green);font-weight:600;">{{ history_count }} record{{ 's' if history_count != 1 }}</span> in session.
+                  {% else %}
+                    No history yet.
+                  {% endif %}
+                </div>
+              </div>
+              <div style="margin-left:auto;color:var(--green);font-size:0.8rem;font-weight:600;
+                          display:flex;align-items:center;gap:0.35rem;white-space:nowrap;">
+                Open Dashboard <i class="bi bi-arrow-right"></i>
+              </div>
+            </div>
+          </a>
+        </div>
+
+      </div>
+
+      <!-- Pipeline overview -->
+      <div class="fade-up fade-up-d2" style="margin-top:2.5rem;">
+        <div class="section-title" style="font-size:1.1rem;margin-bottom:1rem;">
+          DIP Pipeline
+        </div>
+        <div class="row g-2">
+          {% set steps = [
+            ('1','Circle Detection','Hough transform ROI crop'),
+            ('2','Enhancement','Auto-stretch + unsharp mask'),
+            ('3','CLAHE','Adaptive histogram equalisation'),
+            ('4','Denoising','Non-local means filter'),
+            ('5','Spatial Filter','Sharpening + Laplacian edge'),
+            ('6','Thresholding','Otsu + adaptive hybrid'),
+            ('7','Morphology','Open / close / dilate'),
+            ('8','Contour Detection','Feature extraction & classify'),
+          ] %}
+          {% for num, name, desc in steps %}
+          <div class="col-md-6">
+            <div class="pipeline-step">
+              <div class="step-num">{{ num }}</div>
+              <div>
+                <div class="step-name">{{ name }}</div>
+                <div style="font-size:0.7rem;color:var(--text-muted);">{{ desc }}</div>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── RIGHT: Sidebar ─────────────────────────────── -->
+    <div class="col-lg-4">
+
+      <!-- Legend -->
+      <div class="card-dark fade-up fade-up-d1" style="margin-bottom:1rem;">
+        <div style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-muted);
+                    text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.9rem;">
+          Classification Legend
+        </div>
+        <div style="display:flex;flex-direction:column;gap:0.6rem;">
+          <div style="display:flex;align-items:center;gap:0.7rem;">
+            <div style="width:12px;height:12px;border-radius:50%;background:#22c55e;flex-shrink:0;"></div>
+            <div>
+              <div style="font-size:0.82rem;font-weight:600;color:var(--text);">Pellet</div>
+              <div style="font-size:0.72rem;color:var(--text-muted);">Circularity &gt; 0.70 &amp; Solidity &gt; 0.80</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.7rem;">
+            <div style="width:12px;height:12px;border-radius:50%;background:#6366f1;flex-shrink:0;"></div>
+            <div>
+              <div style="font-size:0.82rem;font-weight:600;color:var(--text);">Fiber</div>
+              <div style="font-size:0.72rem;color:var(--text-muted);">Aspect ratio &gt; 3.0</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.7rem;">
+            <div style="width:12px;height:12px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></div>
+            <div>
+              <div style="font-size:0.82rem;font-weight:600;color:var(--text);">Fragment</div>
+              <div style="font-size:0.72rem;color:var(--text-muted);">All other irregular shapes</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Contamination Scale -->
+      <div class="card-dark fade-up fade-up-d1" style="margin-bottom:1rem;">
+        <div style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-muted);
+                    text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.9rem;">
+          Contamination Scale
+        </div>
+        <div style="display:flex;flex-direction:column;gap:0.5rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span class="badge-level badge-low">LOW</span>
+            <span style="font-size:0.8rem;color:var(--text-muted);">0 – 20%</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span class="badge-level badge-medium">MEDIUM</span>
+            <span style="font-size:0.8rem;color:var(--text-muted);">20 – 50%</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span class="badge-level badge-high">HIGH</span>
+            <span style="font-size:0.8rem;color:var(--text-muted);">50 – 100%</span>
+          </div>
+        </div>
+        <div style="margin-top:0.9rem;font-size:0.72rem;color:var(--text-muted);line-height:1.5;">
+          Score formula: <code style="color:var(--accent);background:rgba(56,189,248,0.08);
+          padding:0.1rem 0.3rem;border-radius:4px;">
+          (microplastic_area / total_dish_area) × 100
+          </code>
+        </div>
+      </div>
+
+      <!-- Recent History -->
+      <div class="card-dark fade-up fade-up-d2">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.9rem;">
+          <div style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-muted);
+                      text-transform:uppercase;letter-spacing:0.08em;">
+            Recent Analyses
+          </div>
+          {% if recent %}
+          <a href="{{ url_for('dashboard') }}" style="font-size:0.75rem;color:var(--accent);text-decoration:none;">
+            View all <i class="bi bi-arrow-right"></i>
+          </a>
+          {% endif %}
+        </div>
+
+        {% if recent %}
+          {% for entry in recent %}
+          <div style="display:flex;align-items:center;gap:0.8rem;padding:0.55rem 0;
+                      border-bottom:1px solid rgba(30,58,95,0.4);">
+            <img src="data:image/png;base64,{{ entry.thumbnail }}"
+                 class="history-thumb" alt="thumb"/>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:0.78rem;font-weight:600;color:var(--text);
+                          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                {{ entry.filename }}
+              </div>
+              <div style="font-size:0.7rem;color:var(--text-muted);">
+                {{ entry.count }} particles &nbsp;·&nbsp;
+                <span class="badge-level badge-{{ entry.level|lower }}">{{ entry.level }}</span>
+              </div>
+            </div>
+            <a href="{{ url_for('view_result', entry_id=entry.id) }}"
+               style="color:var(--accent);font-size:0.75rem;text-decoration:none;white-space:nowrap;">
+              View
+            </a>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div style="text-align:center;padding:1.5rem 0;color:var(--text-muted);font-size:0.85rem;">
+            <i class="bi bi-clock-history" style="font-size:1.5rem;display:block;margin-bottom:0.5rem;"></i>
+            No analyses yet
+          </div>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Processing Steps{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="fade-up" style="margin-bottom:1.8rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+      <div>
+        <div style="font-family:var(--font-mono);font-size:0.72rem;color:var(--accent);
+                    letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.4rem;">
+          DIP Pipeline Visualisation
+        </div>
+        <div class="section-title">Processing Steps</div>
+        <div class="section-sub">
+          {{ filename }} &nbsp;·&nbsp; {{ count }} particles &nbsp;·&nbsp;
+          Score: {{ score }}% &nbsp;·&nbsp;
+          <span class="badge-level badge-{{ level|lower }}">{{ level }}</span>
+        </div>
+      </div>
+      <button onclick="window.close()" class="btn-outline">
+        <i class="bi bi-x-lg"></i> Close
+      </button>
+    </div>
+  </div>
+
+  {% set step_meta = [
+    ('cropped_roi',   '1. Circular ROI Crop',    'Hough circle detection crops and masks the petri dish region. All pixels outside the dish boundary are zeroed.'),
+    ('enhancement',   '2. Image Enhancement',    'Auto contrast stretch in LAB colour space + unsharp masking to amplify fine particle detail.'),
+    ('histogram',     '3. CLAHE Equalisation',   'Contrast Limited Adaptive Histogram Equalisation applied to the L channel, boosting local contrast uniformly.'),
+    ('noise_removal', '4. Noise Removal',         'Fast Non-Local Means denoising smooths random sensor noise while preserving particle edges.'),
+    ('spatial',       '5. Spatial Filtering',    'Sharpening kernel highlights particle boundaries. Laplacian edge map overlaid to further accentuate borders.'),
+    ('threshold',     '6. Thresholding',         'Hybrid Otsu global threshold + Gaussian adaptive threshold. Pixels detected by either method included in binary mask.'),
+    ('morphology',    '7. Morphological Ops',    'Opening removes isolated noise pixels. Closing fills internal holes. Dilation connects nearby particle regions.'),
+    ('final',         '8. Detection Result',     'Contours extracted from the morphological binary. Each particle classified as Fiber, Fragment, or Pellet and colour-coded.'),
+  ] %}
+
+  <div class="row g-4">
+    {% for key, title, desc in step_meta %}
+      {% if steps[key] %}
+      <div class="col-md-6 col-xl-3 fade-up" style="animation-delay:{{ loop.index0 * 0.07 }}s">
+        <div class="card-dark" style="height:100%;">
+          <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--accent);
+                      letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.5rem;">
+            Step {{ loop.index }}
+          </div>
+          <img src="data:image/png;base64,{{ steps[key] }}"
+               class="img-preview" alt="{{ title }}"
+               style="cursor:zoom-in;" onclick="openLightbox(this.src, '{{ title }}')"/>
+          <div style="margin-top:0.7rem;">
+            <div style="font-weight:700;font-size:0.85rem;color:var(--text);margin-bottom:0.3rem;">{{ title }}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);line-height:1.55;">{{ desc }}</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <!-- Comparison strip -->
+  {% if steps.cropped_roi and steps.final %}
+  <div class="card-dark fade-up" style="margin-top:2rem;">
+    <div style="font-weight:700;font-size:0.95rem;color:var(--text);margin-bottom:1rem;">
+      <i class="bi bi-layout-split me-2" style="color:var(--accent);"></i>Before / After Comparison
+    </div>
+    <div class="row g-3">
+      <div class="col-md-6" style="text-align:center;">
+        <img src="data:image/png;base64,{{ steps.cropped_roi }}" class="img-preview" alt="Before"/>
+        <div class="img-label">Original Cropped ROI</div>
+      </div>
+      <div class="col-md-6" style="text-align:center;">
+        <img src="data:image/png;base64,{{ steps.final }}" class="img-preview" alt="After"/>
+        <div class="img-label">
+          Final Detection &nbsp;
+          <span style="color:#22c55e;">● Pellet</span>
+          <span style="color:#6366f1;margin-left:0.5rem;">● Fiber</span>
+          <span style="color:#f59e0b;margin-left:0.5rem;">● Fragment</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" style="display:none;position:fixed;inset:0;background:rgba(5,10,20,0.92);
+     z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:1rem;"
+     onclick="closeLightbox()">
+  <img id="lb-img" src="" style="max-width:90vw;max-height:80vh;border-radius:12px;
+       border:1px solid var(--border);box-shadow:0 0 40px rgba(56,189,248,0.2);" alt=""/>
+  <div id="lb-title" style="color:var(--text-dim);font-size:0.85rem;font-family:var(--font-mono);"></div>
+  <div style="color:var(--text-muted);font-size:0.75rem;">Click anywhere to close</div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function openLightbox(src, title) {
+  document.getElementById('lb-img').src   = src;
+  document.getElementById('lb-title').textContent = title;
+  const lb = document.getElementById('lightbox');
+  lb.style.display = 'flex';
+}
+function closeLightbox() {
+  document.getElementById('lightbox').style.display = 'none';
+}
+</script>
+{% endblock %}

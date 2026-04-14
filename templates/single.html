@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}Single Image Analysis{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="fade-up" style="margin-bottom:1.8rem;">
+    <a href="{{ url_for('index') }}" class="btn-outline" style="font-size:0.78rem;padding:0.35rem 0.9rem;margin-bottom:1rem;display:inline-flex;">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+    <div class="section-title">Single Image Analysis</div>
+    <div class="section-sub">Upload a petri-dish microscope image. MicroScan will detect the circular region and run the full DIP pipeline.</div>
+  </div>
+
+  <!-- Error -->
+  {% if error %}
+  <div class="alert-error fade-up" style="margin-bottom:1.5rem;">
+    <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
+  </div>
+  {% endif %}
+
+  <!-- Upload Form -->
+  {% if not result %}
+  <div class="row g-4 fade-up fade-up-d1">
+    <div class="col-lg-6">
+      <div class="card-dark card-glow">
+        <div style="font-weight:700;font-size:1rem;margin-bottom:1.2rem;color:var(--text);">
+          <i class="bi bi-cloud-upload me-2" style="color:var(--accent);"></i>
+          Upload Sample Image
+        </div>
+        <form method="post" enctype="multipart/form-data" data-loading>
+          <div class="dropzone" id="dz">
+            <input type="file" name="image" accept="image/*" required/>
+            <div class="dropzone-icon"><i class="bi bi-image"></i></div>
+            <div class="dropzone-title">Drop image here or click to browse</div>
+            <div class="dropzone-sub">Supports JPG, PNG, BMP, TIFF · Max 20 MB</div>
+          </div>
+          <button type="submit" class="btn-scan" style="width:100%;justify-content:center;margin-top:1rem;">
+            <i class="bi bi-cpu"></i> Run DIP Analysis
+          </button>
+        </form>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card-dark" style="height:100%;">
+        <div style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-muted);
+                    text-transform:uppercase;letter-spacing:0.08em;margin-bottom:1rem;">What happens next</div>
+        {% set steps = [
+          ('Circle Detection', 'Hough transform locates the petri dish and crops to the circular ROI'),
+          ('Enhancement', 'Auto contrast stretch and unsharp masking improve particle visibility'),
+          ('CLAHE', 'Adaptive histogram equalisation balances local contrast'),
+          ('Denoising', 'Non-local means filter removes sensor noise while preserving edges'),
+          ('Spatial Filter', 'Laplacian sharpening highlights particle boundaries'),
+          ('Thresholding', 'Combined Otsu + adaptive threshold separates particles from background'),
+          ('Morphology', 'Open/close/dilate operations clean up the binary mask'),
+          ('Detection', 'Contours extracted and classified as Fiber, Fragment, or Pellet'),
+        ] %}
+        {% for name, desc in steps %}
+        <div style="display:flex;gap:0.7rem;margin-bottom:0.7rem;">
+          <div style="width:6px;border-radius:3px;background:linear-gradient(180deg,var(--accent),var(--accent2));
+                      flex-shrink:0;min-height:30px;"></div>
+          <div>
+            <div style="font-size:0.8rem;font-weight:600;color:var(--text);">{{ name }}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);">{{ desc }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {% else %}
+
+  <!-- ── RESULTS ───────────────────────────────────────── -->
+  <div class="fade-up" style="margin-bottom:0.5rem;display:flex;align-items:center;gap:1rem;">
+    <div style="font-size:0.8rem;color:var(--text-muted);">
+      <i class="bi bi-file-earmark-image me-1"></i>{{ filename }}
+      &nbsp;·&nbsp; {{ timestamp }}
+      {% if from_history %}
+      &nbsp;·&nbsp; <span style="color:var(--accent2);">Viewing from history</span>
+      {% endif %}
+    </div>
+    {% if not from_history %}
+    <a href="{{ url_for('single') }}" class="btn-outline" style="font-size:0.75rem;padding:0.3rem 0.8rem;">
+      <i class="bi bi-plus"></i> New Analysis
+    </a>
+    {% endif %}
+  </div>
+
+  <!-- Stats row -->
+  <div class="row g-3 fade-up fade-up-d1" style="margin-bottom:1.5rem;">
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value">{{ result.count }}</div>
+        <div class="stat-label">Particles</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value">{{ result.score }}%</div>
+        <div class="stat-label">Contam. Score</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value" style="font-size:1.5rem;">
+          {% if result.level == 'Low' %}
+            <span style="color:#4ade80;">&#9679; Low</span>
+          {% elif result.level == 'Medium' %}
+            <span style="color:#fbbf24;">&#9679; Medium</span>
+          {% else %}
+            <span style="color:#f87171;">&#9679; High</span>
+          {% endif %}
+        </div>
+        <div class="stat-label">Level</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value" style="font-size:1.4rem;">
+          {{ result.class_counts.Fiber }}F / {{ result.class_counts.Fragment }}Fr / {{ result.class_counts.Pellet }}P
+        </div>
+        <div class="stat-label">Fiber / Fragment / Pellet</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Images + chart -->
+  <div class="row g-4 fade-up fade-up-d2" style="margin-bottom:1.5rem;">
+    <div class="col-md-5">
+      <div class="card-dark" style="text-align:center;">
+        <img src="data:image/png;base64,{{ result.steps.cropped_roi }}" class="img-preview" alt="Cropped ROI"/>
+        <div class="img-label">Cropped ROI (circle masked)</div>
+      </div>
+    </div>
+    <div class="col-md-5">
+      <div class="card-dark" style="text-align:center;">
+        <img src="data:image/png;base64,{{ result.steps.final }}" class="img-preview" alt="Detection Result"/>
+        <div class="img-label" style="display:flex;justify-content:center;gap:1rem;">
+          <span style="color:#22c55e;">● Pellet</span>
+          <span style="color:#6366f1;">● Fiber</span>
+          <span style="color:#f59e0b;">● Fragment</span>
+        </div>
+      </div>
+    </div>
+    {% if chart_b64 %}
+    <div class="col-md-2">
+      <div class="card-dark" style="text-align:center;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+        <img src="data:image/png;base64,{{ chart_b64 }}" style="width:100%;border-radius:8px;" alt="Classification Chart"/>
+        <div class="img-label">Classification</div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Actions row -->
+  <div class="row g-3 fade-up fade-up-d2" style="margin-bottom:1.5rem;">
+    <div class="col-auto">
+      <!-- Show Processing Steps -->
+      <form method="post" action="{{ url_for('single_steps') }}" target="_blank">
+        {% for key, val in result.steps.items() %}
+        <input type="hidden" name="step_{{ key }}" value="{{ val }}"/>
+        {% endfor %}
+        <input type="hidden" name="filename" value="{{ filename }}"/>
+        <input type="hidden" name="count"    value="{{ result.count }}"/>
+        <input type="hidden" name="score"    value="{{ result.score }}"/>
+        <input type="hidden" name="level"    value="{{ result.level }}"/>
+        <button type="submit" class="btn-scan">
+          <i class="bi bi-layers"></i> Show Processing Steps
+        </button>
+      </form>
+    </div>
+    <div class="col-auto">
+      <!-- Download PDF -->
+      <button onclick="downloadPDF('{{ pdf_b64 }}', '{{ filename }}')" class="btn-scan btn-green">
+        <i class="bi bi-file-earmark-pdf"></i> Download PDF Report
+      </button>
+    </div>
+  </div>
+
+  <!-- Detection table -->
+  {% if result.detections %}
+  <div class="card-dark fade-up fade-up-d3">
+    <div style="font-weight:700;margin-bottom:1rem;font-size:0.95rem;color:var(--text);">
+      Detected Particles
+      <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400;margin-left:0.5rem;">
+        ({{ result.count }} total)
+      </span>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="table-dark-custom">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Classification</th>
+            <th>Area (px²)</th>
+            <th>Circularity</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in result.detections %}
+          <tr>
+            <td style="color:var(--text-muted);">{{ loop.index }}</td>
+            <td>
+              {% if d.classification == 'Pellet' %}
+                <span style="color:#4ade80;font-weight:600;">● Pellet</span>
+              {% elif d.classification == 'Fiber' %}
+                <span style="color:#818cf8;font-weight:600;">● Fiber</span>
+              {% elif d.classification == 'Fragment' %}
+                <span style="color:#fbbf24;font-weight:600;">● Fragment</span>
+              {% else %}
+                <span style="color:var(--text-muted);">{{ d.classification }}</span>
+              {% endif %}
+            </td>
+            <td style="font-family:var(--font-mono);font-size:0.8rem;">{{ d.area }}</td>
+            <td style="font-family:var(--font-mono);font-size:0.8rem;">{{ d.circularity }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card-dark fade-up fade-up-d3" style="text-align:center;padding:2rem;">
+    <i class="bi bi-check-circle" style="font-size:2rem;color:var(--green);"></i>
+    <div style="margin-top:0.5rem;color:var(--text-muted);">No microplastics detected in this sample.</div>
+  </div>
+  {% endif %}
+
+  {% endif %} {# end if result #}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function downloadPDF(b64, filename) {
+  const bytes = atob(b64);
+  const arr   = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const blob = new Blob([arr], {type: 'application/pdf'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'microscan_' + filename.replace(/\.[^.]+$/, '') + '.pdf';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+
+  <div class="fade-up" style="margin-bottom:1.8rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+      <div>
+        <div style="font-family:var(--font-mono);font-size:0.72rem;color:var(--accent);
+                    letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.4rem;">
+          Session History
+        </div>
+        <div class="section-title">Analysis Dashboard</div>
+        <div class="section-sub">
+          All analyses from this browser session.
+          {% if history %}
+            {{ history|length }} record{{ 's' if history|length != 1 }}.
+          {% endif %}
+          History clears when the browser session ends.
+        </div>
+      </div>
+      <div style="display:flex;gap:0.7rem;flex-wrap:wrap;">
+        <a href="{{ url_for('single') }}" class="btn-scan" style="font-size:0.85rem;">
+          <i class="bi bi-image"></i> New Single
+        </a>
+        <a href="{{ url_for('bulk') }}" class="btn-scan" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);font-size:0.85rem;">
+          <i class="bi bi-images"></i> New Bulk
+        </a>
+        {% if history %}
+        <form method="post" action="{{ url_for('clear_history') }}" onsubmit="return confirm('Clear all history?');">
+          <button type="submit" class="btn-outline" style="font-size:0.85rem;color:#f87171;border-color:rgba(239,68,68,0.3);">
+            <i class="bi bi-trash3"></i> Clear History
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if not history %}
+  <!-- Empty state -->
+  <div class="card-dark fade-up" style="text-align:center;padding:4rem 2rem;">
+    <div style="font-size:3.5rem;color:var(--border);margin-bottom:1rem;">
+      <i class="bi bi-clock-history"></i>
+    </div>
+    <div style="font-size:1.1rem;font-weight:600;color:var(--text);margin-bottom:0.5rem;">No analyses yet</div>
+    <div style="color:var(--text-muted);font-size:0.875rem;max-width:380px;margin:0 auto 1.5rem;">
+      Upload a single image or a batch of samples to see your analysis history here.
+    </div>
+    <div style="display:flex;gap:0.8rem;justify-content:center;flex-wrap:wrap;">
+      <a href="{{ url_for('single') }}" class="btn-scan">
+        <i class="bi bi-image"></i> Analyse Single Image
+      </a>
+      <a href="{{ url_for('bulk') }}" class="btn-scan" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+        <i class="bi bi-images"></i> Bulk Upload
+      </a>
+    </div>
+  </div>
+
+  {% else %}
+
+  <!-- Stats row -->
+  {% set total_particles = history | sum(attribute='count') %}
+  {% set avg_score = (history | sum(attribute='score') / history|length) | round(2) %}
+  {% set high_samples = history | selectattr('level','equalto','High') | list | length %}
+
+  <div class="row g-3 fade-up fade-up-d1" style="margin-bottom:1.5rem;">
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value">{{ history|length }}</div>
+        <div class="stat-label">Total Analyses</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value">{{ total_particles }}</div>
+        <div class="stat-label">Total Particles</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value">{{ avg_score }}%</div>
+        <div class="stat-label">Avg Score</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-block">
+        <div class="stat-value" style="color:{% if high_samples > 0 %}#f87171{% else %}#4ade80{% endif %};">
+          {{ high_samples }}
+        </div>
+        <div class="stat-label">High-Risk Samples</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- History cards -->
+  <div class="row g-3 fade-up fade-up-d2">
+    {% for entry in history %}
+    <div class="col-md-6 col-xl-4">
+      <div class="card-dark card-glow" style="position:relative;overflow:hidden;">
+
+        <!-- Level indicator stripe -->
+        <div style="position:absolute;top:0;left:0;width:4px;height:100%;
+                    background:{% if entry.level=='High' %}#ef4444{% elif entry.level=='Medium' %}#f59e0b{% else %}#22c55e{% endif %};
+                    border-radius:0;"></div>
+
+        <div style="margin-left:0.8rem;">
+          <!-- Top row -->
+          <div style="display:flex;align-items:flex-start;gap:0.9rem;margin-bottom:0.9rem;">
+            <img src="data:image/png;base64,{{ entry.thumbnail }}"
+                 style="width:56px;height:56px;border-radius:8px;object-fit:cover;
+                        border:1px solid var(--border);flex-shrink:0;" alt="thumb"/>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:0.82rem;font-weight:700;color:var(--text);
+                          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                {{ entry.filename }}
+              </div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.15rem;
+                          font-family:var(--font-mono);">
+                {{ entry.timestamp }}
+              </div>
+              <div style="margin-top:0.35rem;">
+                <span class="badge-level badge-{{ entry.level|lower }}" style="font-size:0.65rem;">
+                  {{ entry.level }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Metrics row -->
+          <div style="display:flex;gap:1.2rem;margin-bottom:1rem;">
+            <div>
+              <div style="font-family:var(--font-mono);font-size:1.1rem;font-weight:700;
+                          color:var(--accent);">{{ entry.count }}</div>
+              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;
+                          letter-spacing:0.06em;">Particles</div>
+            </div>
+            <div>
+              <div style="font-family:var(--font-mono);font-size:1.1rem;font-weight:700;
+                          color:var(--accent2);">{{ entry.score }}%</div>
+              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;
+                          letter-spacing:0.06em;">Score</div>
+            </div>
+            {% if entry.result and entry.result.class_counts %}
+            <div>
+              <div style="font-family:var(--font-mono);font-size:0.75rem;font-weight:600;color:var(--text-dim);">
+                <span style="color:#818cf8;">{{ entry.result.class_counts.get('Fiber',0) }}F</span> /
+                <span style="color:#fbbf24;">{{ entry.result.class_counts.get('Fragment',0) }}Fr</span> /
+                <span style="color:#4ade80;">{{ entry.result.class_counts.get('Pellet',0) }}P</span>
+              </div>
+              <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;
+                          letter-spacing:0.06em;">Classification</div>
+            </div>
+            {% endif %}
+          </div>
+
+          <!-- Action buttons -->
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <a href="{{ url_for('view_result', entry_id=entry.id) }}"
+               class="btn-scan" style="font-size:0.75rem;padding:0.4rem 0.9rem;">
+              <i class="bi bi-eye"></i> View Result
+            </a>
+            <a href="{{ url_for('download_pdf', entry_id=entry.id) }}"
+               class="btn-outline" style="font-size:0.75rem;padding:0.4rem 0.9rem;">
+              <i class="bi bi-file-earmark-pdf"></i> PDF
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% endif %}
+
+</div>
+{% endblock %}
