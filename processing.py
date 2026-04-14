@@ -54,10 +54,12 @@ def detect_and_crop_circle(img):
         cropped_img  – square-cropped region around the circle
         mask         – binary circle mask (same size as cropped_img)
         circle_params – (cx, cy, r) in original image coords
+        is_valid_dish – bool indicating if a petri dish is confidently detected
     """
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+    edges = cv2.Canny(blurred, 40, 120)
 
     # Try Hough Circle detection
     circles = cv2.HoughCircles(
@@ -66,20 +68,59 @@ def detect_and_crop_circle(img):
         dp=1.2,
         minDist=min(h, w) * 0.4,
         param1=80,
-        param2=40,
-        minRadius=int(min(h, w) * 0.15),
+        param2=34,
+        minRadius=int(min(h, w) * 0.20),
         maxRadius=int(min(h, w) * 0.55)
     )
 
-    if circles is not None:
-        circles = np.uint16(np.around(circles))
-        # Pick the largest circle
-        best = sorted(circles[0], key=lambda c: c[2], reverse=True)[0]
-        cx, cy, r = int(best[0]), int(best[1]), int(best[2])
-    else:
-        # Fallback: assume circle fills ~80% of the shorter dimension, centered
-        r = int(min(h, w) * 0.40)
-        cx, cy = w // 2, h // 2
+    if circles is None:
+        # No circular dish confidently found: return an invalid marker.
+        return img.copy(), np.zeros((h, w), dtype=np.uint8), None, False
+
+    circles = np.uint16(np.around(circles))
+
+    best = None
+    best_score = -1.0
+    for c in circles[0]:
+        cx, cy, r = int(c[0]), int(c[1]), int(c[2])
+        if r <= 0:
+            continue
+
+        rr = float(r)
+        ring_outer = np.zeros((h, w), dtype=np.uint8)
+        ring_inner = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(ring_outer, (cx, cy), int(rr * 1.03), 255, -1)
+        cv2.circle(ring_inner, (cx, cy), int(rr * 0.97), 255, -1)
+        ring = cv2.subtract(ring_outer, ring_inner)
+
+        ring_pixels = int(np.sum(ring > 0))
+        if ring_pixels == 0:
+            continue
+
+        edge_ratio = float(np.sum((edges > 0) & (ring > 0))) / ring_pixels
+        center_offset = math.hypot(cx - (w / 2.0), cy - (h / 2.0)) / (min(h, w) / 2.0)
+        radius_ratio = rr / float(min(h, w))
+
+        center_score = max(0.0, 1.0 - center_offset)
+        radius_score = 1.0 if (0.23 <= radius_ratio <= 0.52) else 0.0
+        score = (1.6 * edge_ratio) + (0.8 * center_score) + (0.8 * radius_score)
+
+        if score > best_score:
+            best_score = score
+            best = (cx, cy, r, edge_ratio, radius_ratio, center_offset)
+
+    if best is None:
+        return img.copy(), np.zeros((h, w), dtype=np.uint8), None, False
+
+    cx, cy, r, edge_ratio, radius_ratio, center_offset = best
+    is_valid_dish = (
+        edge_ratio > 0.04 and
+        0.23 <= radius_ratio <= 0.52 and
+        center_offset < 0.60
+    )
+
+    if not is_valid_dish:
+        return img.copy(), np.zeros((h, w), dtype=np.uint8), None, False
 
     # Pad radius slightly
     r = int(r * 1.02)
@@ -99,7 +140,53 @@ def detect_and_crop_circle(img):
     local_r = r
     cv2.circle(mask, (local_cx, local_cy), local_r, 255, -1)
 
-    return cropped, mask, (cx, cy, r)
+    return cropped, mask, (cx, cy, r), True
+
+
+def build_inner_analysis_mask(mask, border_ratio=0.07):
+    """Shrink the dish mask to exclude the rim and wall reflections."""
+    if mask is None or mask.size == 0:
+        return mask
+
+    min_dim = min(mask.shape[:2])
+    kernel_size = max(7, int(min_dim * border_ratio))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    inner = cv2.erode(mask, kernel, iterations=1)
+
+    # Fallback to original mask if erosion collapses too aggressively.
+    if np.sum(inner > 0) < 0.20 * np.sum(mask > 0):
+        return mask.copy()
+
+    return inner
+
+
+def build_empty_result(img, warning):
+    """Return a clean zero-result when the image is not a valid petri-dish sample."""
+    h, w = img.shape[:2]
+    black = np.zeros((h, w, 3), dtype=np.uint8)
+    img_b64 = img_to_b64(img)
+    black_b64 = img_to_b64(black)
+    return {
+        "steps": {
+            "cropped_roi": img_b64,
+            "enhancement": img_b64,
+            "histogram": img_b64,
+            "noise_removal": img_b64,
+            "spatial": img_b64,
+            "threshold": black_b64,
+            "morphology": black_b64,
+            "final": img_b64,
+        },
+        "detections": [],
+        "count": 0,
+        "score": 0.0,
+        "level": "Low",
+        "class_counts": {"Fiber": 0, "Fragment": 0, "Pellet": 0, "Unknown": 0},
+        "warning": warning,
+    }
 
 
 def apply_circle_mask(img, mask):
@@ -196,10 +283,15 @@ def spatial_filtering(img):
 def threshold_image(img, mask=None):
     """
     Improved thresholding for transparent microplastics.
-    Uses: Otsu + Adaptive + Morphological Gradient + Canny Edge.
+    Uses: Otsu + Adaptive + Morphological Gradient + Canny Edge +
+    background-compensated detail maps.
     Returns binary image (uint8, 0/255).
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Normalize local contrast before thresholding so faint flakes are not lost
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
 
     # --- Method 1: Otsu Thresholding (good for dark objects) ---
     _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -228,11 +320,33 @@ def threshold_image(img, mask=None):
     kernel_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     edges_dilated = cv2.dilate(edges, kernel_edge, iterations=1)
 
-    # --- Combine all methods: at least 2 methods must detect ---
-    # This reduces false positives while catching transparent materials
+    # --- Method 5: Background-compensated detail maps ---
+    # Top-hat and black-hat boost small bright or dark flakes against uneven backgrounds.
+    kernel_detail = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel_detail)
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel_detail)
+    detail = cv2.max(tophat, blackhat)
+    detail = cv2.normalize(detail, None, 0, 255, cv2.NORM_MINMAX)
+    _, detail_thresh = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Small local deviations from a median-smoothed background often capture translucent flakes.
+    median_bg = cv2.medianBlur(gray, 5)
+    deviation = cv2.absdiff(gray, median_bg)
+    _, deviation_thresh = cv2.threshold(deviation, 8, 255, cv2.THRESH_BINARY)
+
+    # Small bright/dark square-like particles are often low-contrast and tiny.
+    # A local box-blur residual highlights these micro-features.
+    local_bg = cv2.blur(gray, (7, 7))
+    micro_detail = cv2.absdiff(gray, local_bg)
+    _, micro_thresh = cv2.threshold(micro_detail, 7, 255, cv2.THRESH_BINARY)
+
+    # --- Combine all methods ---
     combined = cv2.bitwise_or(otsu, adaptive)
     combined = cv2.bitwise_or(combined, grad_thresh)
     combined = cv2.bitwise_or(combined, edges_dilated)
+    combined = cv2.bitwise_or(combined, detail_thresh)
+    combined = cv2.bitwise_or(combined, deviation_thresh)
+    combined = cv2.bitwise_or(combined, micro_thresh)
 
     # Apply dish mask to remove outside-circle detections
     if mask is not None:
@@ -274,6 +388,171 @@ def morphological_ops(binary_img):
     return final
 
 
+def build_essential_roi_mask(img_shape, margin_ratio=0.08):
+    """Build a central ROI mask to ignore non-essential outer image regions."""
+    h, w = img_shape[:2]
+    cx, cy = w // 2, h // 2
+
+    ax = max(20, int((w * (1.0 - margin_ratio * 2)) / 2))
+    ay = max(20, int((h * (1.0 - margin_ratio * 2)) / 2))
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.ellipse(mask, (cx, cy), (ax, ay), 0, 0, 360, 255, -1)
+    return mask
+
+
+def remove_border_components(binary_img, border_px=12, min_area_keep=6):
+    """Remove connected components touching the outer border area."""
+    h, w = binary_img.shape[:2]
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_img, connectivity=8)
+    cleaned = np.zeros_like(binary_img)
+
+    for label in range(1, num_labels):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < min_area_keep:
+            continue
+
+        x = int(stats[label, cv2.CC_STAT_LEFT])
+        y = int(stats[label, cv2.CC_STAT_TOP])
+        ww = int(stats[label, cv2.CC_STAT_WIDTH])
+        hh = int(stats[label, cv2.CC_STAT_HEIGHT])
+
+        touches_border = (
+            x <= border_px or
+            y <= border_px or
+            (x + ww) >= (w - border_px) or
+            (y + hh) >= (h - border_px)
+        )
+        if touches_border:
+            continue
+
+        cleaned[labels == label] = 255
+
+    return cleaned
+
+
+def filter_detections(detections, analysis_mask, border_px=12):
+    """Filter detections outside the essential ROI or touching image borders."""
+    h, w = analysis_mask.shape[:2]
+    filtered = []
+
+    for d in detections:
+        cnt = d["contour"]
+        x, y, ww, hh = cv2.boundingRect(cnt)
+
+        if x <= border_px or y <= border_px or (x + ww) >= (w - border_px) or (y + hh) >= (h - border_px):
+            continue
+
+        M = cv2.moments(cnt)
+        if M["m00"] == 0:
+            continue
+
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        if cx < 0 or cy < 0 or cx >= w or cy >= h:
+            continue
+        if analysis_mask[cy, cx] == 0:
+            continue
+
+        filtered.append(d)
+
+    return filtered
+
+
+def fallback_particle_mask(img, mask=None):
+    """
+    Build a more sensitive binary mask for faint, bright, or translucent particles.
+    This is used only when the main pipeline returns no detections.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+
+    tophat = cv2.morphologyEx(blur, cv2.MORPH_TOPHAT, kernel)
+    blackhat = cv2.morphologyEx(blur, cv2.MORPH_BLACKHAT, kernel)
+
+    _, bright = cv2.threshold(tophat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, dark = cv2.threshold(blackhat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    detail = cv2.max(tophat, blackhat)
+    detail = cv2.normalize(detail, None, 0, 255, cv2.NORM_MINMAX)
+    _, detail_thresh = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    median_bg = cv2.medianBlur(gray, 7)
+    deviation = cv2.absdiff(gray, median_bg)
+    _, deviation_thresh = cv2.threshold(deviation, 8, 255, cv2.THRESH_BINARY)
+
+    edges = cv2.Canny(blur, 15, 60)
+    edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+
+    combined = cv2.bitwise_or(bright, dark)
+    combined = cv2.bitwise_or(combined, edges)
+    combined = cv2.bitwise_or(combined, detail_thresh)
+    combined = cv2.bitwise_or(combined, deviation_thresh)
+
+    if mask is not None:
+        combined = cv2.bitwise_and(combined, mask)
+
+    combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+    combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)), iterations=1)
+
+    return combined
+
+
+def last_resort_particle_detections(img, mask=None):
+    """
+    Extract tiny visible blobs using connected components on a loose foreground map.
+    This is intentionally sensitive and only used when the regular passes undercount.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(gray)
+
+    bg = cv2.medianBlur(gray, 9)
+    diff = cv2.absdiff(gray, bg)
+    diff = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
+
+    # Slightly boost bright/dark specks independently.
+    tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
+    detail = cv2.max(diff, cv2.max(tophat, blackhat))
+
+    _, binary = cv2.threshold(detail, 10, 255, cv2.THRESH_BINARY)
+    if mask is not None:
+        binary = cv2.bitwise_and(binary, mask)
+
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+    binary = cv2.dilate(binary, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)), iterations=1)
+
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    detections = []
+
+    for label in range(1, num_labels):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < 3:
+            continue
+
+        component = np.uint8(labels == label) * 255
+        contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+
+        cnt = max(contours, key=cv2.contourArea)
+        cls = classify_particle(cnt)
+        if cls == "Unknown":
+            cls = "Fragment"
+
+        detections.append({
+            "contour": cnt,
+            "classification": cls,
+            "area": float(area),
+            "circularity": compute_circularity(cnt),
+        })
+
+    return detections, binary
+
+
 # ─────────────────────────────────────────────
 # STEP 8: Contour Detection & Feature Extraction
 # ─────────────────────────────────────────────
@@ -306,7 +585,7 @@ def classify_particle(contour):
       - Fragment: everything else
     """
     area = cv2.contourArea(contour)
-    if area < 5:
+    if area < 2:
         return "Unknown"
 
     # Bounding rect aspect ratio
@@ -327,7 +606,7 @@ def classify_particle(contour):
         return "Fragment"
 
 
-def detect_contours(binary_img, min_area=15, max_area=None):
+def detect_contours(binary_img, min_area=4, max_area=None):
     """
     Find and filter contours from a binary image with improved heuristics.
     Returns list of (contour, classification, area, circularity).
@@ -352,7 +631,7 @@ def detect_contours(binary_img, min_area=15, max_area=None):
         
         # Filter by contour length: must have a reasonable perimeter
         perimeter = cv2.arcLength(cnt, True)
-        if perimeter < 10:  # too small to be a real object
+        if perimeter < 4:  # too small to be a real object
             continue
         
         # Classify the particle
@@ -446,9 +725,10 @@ def run_pipeline(b64_input):
     """
     original = b64_to_img(b64_input)
 
-    # 1. Detect & crop circle
-    cropped, mask, circle_params = detect_and_crop_circle(original)
-    masked_crop = apply_circle_mask(cropped, mask)
+    # 1. Full-image ROI (circle detection removed)
+    masked_crop = original.copy()
+    analysis_mask = build_essential_roi_mask(masked_crop.shape, margin_ratio=0.04)
+    border_px = max(6, int(min(masked_crop.shape[:2]) * 0.025))
 
     # 2. Enhancement
     enhanced = enhance_image(masked_crop)
@@ -463,19 +743,60 @@ def run_pipeline(b64_input):
     filtered = spatial_filtering(denoised)
 
     # 6. Thresholding
-    binary = threshold_image(filtered, mask)
+    binary = threshold_image(filtered, analysis_mask)
 
     # 7. Morphology
     morph = morphological_ops(binary)
+    morph = remove_border_components(morph, border_px=border_px, min_area_keep=6)
 
     # 8. Contour detection
     detections = detect_contours(morph)
+    detections = filter_detections(detections, analysis_mask, border_px=border_px)
+
+    # If the primary pipeline undercounts, fall back to a more sensitive mask
+    # built from the original cropped ROI. This avoids collapsing several visible flakes
+    # into a single merged detection.
+    if len(detections) <= 1:
+        fallback_binary = fallback_particle_mask(masked_crop, analysis_mask)
+        fallback_binary = remove_border_components(fallback_binary, border_px=border_px, min_area_keep=6)
+        fallback_detections = detect_contours(fallback_binary, min_area=3)
+        fallback_detections = filter_detections(fallback_detections, analysis_mask, border_px=border_px)
+        if len(fallback_detections) > len(detections):
+            detections = fallback_detections
+            morph = fallback_binary
+
+    if len(detections) <= 1:
+        rescue_detections, rescue_binary = last_resort_particle_detections(masked_crop, analysis_mask)
+        rescue_binary = remove_border_components(rescue_binary, border_px=border_px, min_area_keep=5)
+        rescue_detections = detect_contours(rescue_binary, min_area=3)
+        rescue_detections = filter_detections(rescue_detections, analysis_mask, border_px=border_px)
+        if len(rescue_detections) > len(detections):
+            detections = rescue_detections
+            morph = rescue_binary
+
+    # Last attempt: if everything is still zero, relax ROI restrictions so tiny inner-dish
+    # particles are not suppressed by conservative masks on challenging dark samples.
+    if len(detections) == 0:
+        relaxed_mask = np.ones(masked_crop.shape[:2], dtype=np.uint8) * 255
+        relaxed_border = max(2, border_px // 2)
+
+        relaxed_binary = threshold_image(filtered, relaxed_mask)
+        relaxed_morph = morphological_ops(relaxed_binary)
+        relaxed_morph = remove_border_components(relaxed_morph, border_px=relaxed_border, min_area_keep=3)
+
+        relaxed_detections = detect_contours(relaxed_morph, min_area=2)
+        relaxed_detections = filter_detections(relaxed_detections, relaxed_mask, border_px=relaxed_border)
+
+        if relaxed_detections:
+            detections = relaxed_detections
+            morph = relaxed_morph
+            analysis_mask = relaxed_mask
 
     # 9. Draw result
     result_vis = draw_detections(masked_crop, detections)
 
     # 10. Contamination score
-    score, level = compute_contamination(detections, mask)
+    score, level = compute_contamination(detections, analysis_mask)
 
     # Classification counts
     class_counts = {"Fiber": 0, "Fragment": 0, "Pellet": 0, "Unknown": 0}

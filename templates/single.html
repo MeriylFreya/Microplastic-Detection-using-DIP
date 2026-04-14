@@ -9,13 +9,20 @@
       <i class="bi bi-arrow-left"></i> Back
     </a>
     <div class="section-title">Single Image Analysis</div>
-    <div class="section-sub">Upload a petri-dish microscope image. MicroScan will detect the circular region and run the full DIP pipeline.</div>
+    <div class="section-sub">Upload a microscope image. MicroScan will run the full DIP pipeline on the full image.</div>
   </div>
 
   <!-- Error -->
   {% if error %}
   <div class="alert-error fade-up" style="margin-bottom:1.5rem;">
     <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
+  </div>
+  {% endif %}
+
+  <!-- Warning -->
+  {% if result and result.warning %}
+  <div class="alert-error fade-up" style="margin-bottom:1.5rem;background:rgba(245,158,11,0.16);border-color:rgba(245,158,11,0.4);color:#fcd34d;">
+    <i class="bi bi-info-circle-fill"></i> {{ result.warning }}
   </div>
   {% endif %}
 
@@ -46,7 +53,7 @@
         <div style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-muted);
                     text-transform:uppercase;letter-spacing:0.08em;margin-bottom:1rem;">What happens next</div>
         {% set steps = [
-          ('Circle Detection', 'Hough transform locates the petri dish and crops to the circular ROI'),
+          ('ROI Selection', 'The full uploaded image is used as the analysis region'),
           ('Enhancement', 'Auto contrast stretch and unsharp masking improve particle visibility'),
           ('CLAHE', 'Adaptive histogram equalisation balances local contrast'),
           ('Denoising', 'Non-local means filter removes sensor noise while preserving edges'),
@@ -130,7 +137,7 @@
     <div class="col-md-5">
       <div class="card-dark" style="text-align:center;">
         <img src="data:image/png;base64,{{ result.steps.cropped_roi }}" class="img-preview" alt="Cropped ROI"/>
-        <div class="img-label">Cropped ROI (circle masked)</div>
+        <div class="img-label">Analysis ROI (full image)</div>
       </div>
     </div>
     <div class="col-md-5">
