@@ -143,7 +143,7 @@ def detect_and_crop_circle(img):
     return cropped, mask, (cx, cy, r), True
 
 
-def build_inner_analysis_mask(mask, border_ratio=0.07):
+def build_inner_analysis_mask(mask, border_ratio=0.10):
     """Shrink the dish mask to exclude the rim and wall reflections."""
     if mask is None or mask.size == 0:
         return mask
@@ -454,6 +454,17 @@ def filter_detections(detections, analysis_mask, border_px=12):
         if analysis_mask[cy, cx] == 0:
             continue
 
+        component_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(component_mask, [cnt], -1, 255, -1)
+        inside_pixels = int(np.sum((component_mask > 0) & (analysis_mask > 0)))
+        total_pixels = int(np.sum(component_mask > 0))
+        if total_pixels == 0:
+            continue
+
+        overlap_ratio = inside_pixels / float(total_pixels)
+        if overlap_ratio < 0.90:
+            continue
+
         filtered.append(d)
 
     return filtered
@@ -650,34 +661,101 @@ def detect_contours(binary_img, min_area=4, max_area=None):
     return results
 
 
+def estimate_confidence(area, circularity, image_area):
+    """Estimate a YOLO-like confidence score from contour shape and size."""
+    if image_area <= 0:
+        return 0.5
+
+    size_score = min(1.0, max(0.0, area / (image_area * 0.01)))
+    shape_score = min(1.0, max(0.0, circularity))
+    confidence = 0.35 + (0.35 * size_score) + (0.30 * shape_score)
+    return round(max(0.5, min(confidence, 0.99)), 3)
+
+
+def _detection_center(detection):
+    cnt = detection["contour"]
+    M = cv2.moments(cnt)
+    if M["m00"] == 0:
+        x, y, ww, hh = cv2.boundingRect(cnt)
+        return (x + ww / 2.0, y + hh / 2.0)
+    return (M["m10"] / M["m00"], M["m01"] / M["m00"])
+
+
+def merge_detection_sets(*detection_sets, distance_px=10):
+    """Merge overlapping detections from multiple passes."""
+    merged = []
+
+    for detection_set in detection_sets:
+        for detection in detection_set:
+            center_x, center_y = _detection_center(detection)
+            area = float(detection.get("area", 0.0))
+
+            matched_index = None
+            for index, existing in enumerate(merged):
+                existing_x, existing_y = _detection_center(existing)
+                if math.hypot(center_x - existing_x, center_y - existing_y) <= distance_px:
+                    matched_index = index
+                    break
+
+            if matched_index is None:
+                merged.append(detection)
+                continue
+
+            existing = merged[matched_index]
+            existing_area = float(existing.get("area", 0.0))
+            if area > existing_area:
+                merged[matched_index] = detection
+
+    return merged
+
+
 # ─────────────────────────────────────────────
 # STEP 9: Draw Detection Result
 # ─────────────────────────────────────────────
 
 COLOR_MAP = {
-    "Pellet":   (0, 255, 100),   # green
-    "Fiber":    (255, 80,  80),  # blue
-    "Fragment": (0, 180, 255),   # orange-yellow
+    "Pellet":   (180, 80, 255),   # purple
+    "Fiber":    (180, 80, 255),   # purple
+    "Fragment": (180, 80, 255),   # purple
     "Unknown":  (180, 180, 180),
 }
 
 
 def draw_detections(img, detections):
-    """Draw contours + labels on a copy of img."""
+    """Draw bounding boxes + labels on a copy of img."""
     vis = img.copy()
+    green = (0, 255, 0)
+    black = (0, 0, 0)
+    image_area = float(img.shape[0] * img.shape[1])
+    
     for d in detections:
         cnt = d["contour"]
         cls = d["classification"]
-        color = COLOR_MAP.get(cls, (200, 200, 200))
-        cv2.drawContours(vis, [cnt], -1, color, 2)
+        confidence = d.get("confidence")
+        if confidence is None:
+            confidence = estimate_confidence(d.get("area", 0.0), d.get("circularity", 0.0), image_area)
+        confidence_text = f"{int(round(confidence * 100))}%"
+        
+        # Get bounding rectangle
+        x, y, ww, hh = cv2.boundingRect(cnt)
+        
+        # Slight padding so the box is easier to read
+        pad = 2
+        x = max(0, x - pad)
+        y = max(0, y - pad)
+        ww = ww + (2 * pad)
+        hh = hh + (2 * pad)
 
-        # Label near centroid
-        M = cv2.moments(cnt)
-        if M["m00"] != 0:
-            cx = int(M["m10"] / M["m00"])
-            cy = int(M["m01"] / M["m00"])
-            cv2.putText(vis, cls[0], (cx - 4, cy + 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+        # Draw a clean green box and a single class-confidence label
+        cv2.rectangle(vis, (x, y), (x + ww, y + hh), green, 2)
+
+        label = f"{cls[0]} {confidence_text}"
+        text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
+        label_y = max(14, y - 6)
+        cv2.rectangle(vis, (x, label_y - text_size[1] - 4),
+                  (x + text_size[0] + 4, label_y + 4), green, -1)
+        cv2.putText(vis, label, (x + 2, label_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, black, 1, cv2.LINE_AA)
     return vis
 
 
@@ -725,10 +803,15 @@ def run_pipeline(b64_input):
     """
     original = b64_to_img(b64_input)
 
-    # 1. Full-image ROI (circle detection removed)
-    masked_crop = original.copy()
-    analysis_mask = build_essential_roi_mask(masked_crop.shape, margin_ratio=0.04)
-    border_px = max(6, int(min(masked_crop.shape[:2]) * 0.025))
+    dish_crop, dish_mask, _, is_valid_dish = detect_and_crop_circle(original)
+    if is_valid_dish:
+        masked_crop = dish_crop
+        analysis_mask = build_inner_analysis_mask(dish_mask, border_ratio=0.05)
+        border_px = max(4, int(min(masked_crop.shape[:2]) * 0.02))
+    else:
+        masked_crop = original.copy()
+        analysis_mask = np.ones(masked_crop.shape[:2], dtype=np.uint8) * 255
+        border_px = 0
 
     # 2. Enhancement
     enhanced = enhance_image(masked_crop)
@@ -747,44 +830,44 @@ def run_pipeline(b64_input):
 
     # 7. Morphology
     morph = morphological_ops(binary)
-    morph = remove_border_components(morph, border_px=border_px, min_area_keep=6)
+    if is_valid_dish:
+        morph = remove_border_components(morph, border_px=border_px, min_area_keep=6)
 
     # 8. Contour detection
-    detections = detect_contours(morph)
+    detections = detect_contours(morph, min_area=10)
     detections = filter_detections(detections, analysis_mask, border_px=border_px)
 
-    # If the primary pipeline undercounts, fall back to a more sensitive mask
-    # built from the original cropped ROI. This avoids collapsing several visible flakes
-    # into a single merged detection.
-    if len(detections) <= 1:
+    # Only use the more sensitive passes when the primary pass fails completely.
+    if len(detections) == 0:
         fallback_binary = fallback_particle_mask(masked_crop, analysis_mask)
-        fallback_binary = remove_border_components(fallback_binary, border_px=border_px, min_area_keep=6)
-        fallback_detections = detect_contours(fallback_binary, min_area=3)
+        if is_valid_dish:
+            fallback_binary = remove_border_components(fallback_binary, border_px=border_px, min_area_keep=6)
+        fallback_detections = detect_contours(fallback_binary, min_area=12)
         fallback_detections = filter_detections(fallback_detections, analysis_mask, border_px=border_px)
-        if len(fallback_detections) > len(detections):
-            detections = fallback_detections
-            morph = fallback_binary
 
-    if len(detections) <= 1:
-        rescue_detections, rescue_binary = last_resort_particle_detections(masked_crop, analysis_mask)
-        rescue_binary = remove_border_components(rescue_binary, border_px=border_px, min_area_keep=5)
-        rescue_detections = detect_contours(rescue_binary, min_area=3)
-        rescue_detections = filter_detections(rescue_detections, analysis_mask, border_px=border_px)
-        if len(rescue_detections) > len(detections):
-            detections = rescue_detections
-            morph = rescue_binary
+        if len(fallback_detections) == 0:
+            rescue_detections, rescue_binary = last_resort_particle_detections(masked_crop, analysis_mask)
+            rescue_detections = filter_detections(rescue_detections, analysis_mask, border_px=border_px)
+            if is_valid_dish:
+                rescue_binary = remove_border_components(rescue_binary, border_px=border_px, min_area_keep=5)
+            rescue_binary_detections = detect_contours(rescue_binary, min_area=12)
+            rescue_binary_detections = filter_detections(rescue_binary_detections, analysis_mask, border_px=border_px)
+            fallback_detections = merge_detection_sets(rescue_detections, rescue_binary_detections)
+
+        detections = fallback_detections
 
     # Last attempt: if everything is still zero, relax ROI restrictions so tiny inner-dish
     # particles are not suppressed by conservative masks on challenging dark samples.
     if len(detections) == 0:
         relaxed_mask = np.ones(masked_crop.shape[:2], dtype=np.uint8) * 255
-        relaxed_border = max(2, border_px // 2)
+        relaxed_border = 0 if not is_valid_dish else max(2, border_px // 2)
 
         relaxed_binary = threshold_image(filtered, relaxed_mask)
         relaxed_morph = morphological_ops(relaxed_binary)
-        relaxed_morph = remove_border_components(relaxed_morph, border_px=relaxed_border, min_area_keep=3)
+        if is_valid_dish:
+            relaxed_morph = remove_border_components(relaxed_morph, border_px=relaxed_border, min_area_keep=3)
 
-        relaxed_detections = detect_contours(relaxed_morph, min_area=2)
+        relaxed_detections = detect_contours(relaxed_morph, min_area=12)
         relaxed_detections = filter_detections(relaxed_detections, relaxed_mask, border_px=relaxed_border)
 
         if relaxed_detections:
@@ -809,6 +892,7 @@ def run_pipeline(b64_input):
             "classification": d["classification"],
             "area": round(d["area"], 1),
             "circularity": round(d["circularity"], 3),
+            "confidence": estimate_confidence(d["area"], d["circularity"], masked_crop.shape[0] * masked_crop.shape[1]),
         }
         for d in detections
     ]
@@ -835,3 +919,39 @@ def run_pipeline(b64_input):
         "level": level,
         "class_counts": class_counts,
     }
+
+
+class MicroplasticProcessor:
+    """Convenience wrapper for API endpoints and batch processing."""
+
+    def process_image(self, b64_image):
+        result = run_pipeline(b64_image)
+        return {
+            "success": True,
+            "total_count": result["count"],
+            "shape_distribution": result["class_counts"],
+            "contamination_level": result["level"],
+            "contamination_score": result["score"],
+            "detections": result["detections"],
+            "steps": result["steps"],
+            "count": result["count"],
+            "class_counts": result["class_counts"],
+            "level": result["level"],
+            "score": result["score"],
+        }
+
+    def batch_process(self, b64_images):
+        results = []
+        for index, b64_image in enumerate(b64_images):
+            try:
+                result = self.process_image(b64_image)
+                result["status"] = "success"
+                result["index"] = index
+                results.append(result)
+            except Exception as exc:
+                results.append({
+                    "status": "error",
+                    "index": index,
+                    "error": str(exc),
+                })
+        return results
