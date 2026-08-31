@@ -13,7 +13,7 @@ from flask import (
 
 from processing import (
     file_to_b64, run_pipeline, img_to_b64, b64_to_img,
-    draw_detections, detect_contours
+    draw_detections, detect_contours, MicroplasticProcessor
 )
 from utils import (
     generate_single_pdf,
@@ -22,6 +22,7 @@ from utils import (
 
 app = Flask(__name__)
 app.secret_key = "microscan_secret_key_2025"
+processor = MicroplasticProcessor()
 
 # In-memory session store keyed by session ID
 # { session_id: [ history_entry, ... ] }
@@ -210,6 +211,54 @@ def download_pdf(entry_id):
     safe_name = entry['filename'].replace(' ', '_').rsplit('.', 1)[0]
     resp.headers['Content-Disposition'] = f'attachment; filename=microscan_{safe_name}.pdf'
     return resp
+
+
+# ─────────────────────────────────────────────
+# API
+# ─────────────────────────────────────────────
+
+@app.route('/api/process-image', methods=['POST'])
+def api_process_image():
+    """Process one base64 image with the in-memory processor."""
+    try:
+        data = request.get_json(silent=True) or {}
+        b64_image = data.get('image')
+
+        if not b64_image:
+            return jsonify({'error': 'No image provided'}), 400
+
+        result = processor.process_image(b64_image)
+        return jsonify({
+            'success': True,
+            'total_count': result['total_count'],
+            'distribution': result['shape_distribution'],
+            'level': result['contamination_level'],
+            'score': result['contamination_score'],
+            'detections': result['detections'],
+        })
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/batch-process', methods=['POST'])
+def api_batch_process():
+    """Process multiple base64 images in one request."""
+    try:
+        data = request.get_json(silent=True) or {}
+        b64_images = data.get('images', [])
+
+        if not b64_images:
+            return jsonify({'error': 'No images provided'}), 400
+
+        results = processor.batch_process(b64_images)
+        return jsonify({
+            'success': True,
+            'results': results,
+            'total_processed': len(results),
+            'successful': sum(1 for item in results if item.get('status') == 'success'),
+        })
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
 
 
 if __name__ == '__main__':

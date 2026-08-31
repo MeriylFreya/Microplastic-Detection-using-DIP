@@ -25,7 +25,7 @@
   </div>
 
   {% set step_meta = [
-    ('cropped_roi',   '1. Circular ROI Crop',    'Hough circle detection crops and masks the petri dish region. All pixels outside the dish boundary are zeroed.'),
+    ('cropped_roi',   '1. Full Image ROI',       'The uploaded image is used directly as the analysis region.'),
     ('enhancement',   '2. Image Enhancement',    'Auto contrast stretch in LAB colour space + unsharp masking to amplify fine particle detail.'),
     ('histogram',     '3. CLAHE Equalisation',   'Contrast Limited Adaptive Histogram Equalisation applied to the L channel, boosting local contrast uniformly.'),
     ('noise_removal', '4. Noise Removal',         'Fast Non-Local Means denoising smooths random sensor noise while preserving particle edges.'),
@@ -66,7 +66,7 @@
     <div class="row g-3">
       <div class="col-md-6" style="text-align:center;">
         <img src="data:image/png;base64,{{ steps.cropped_roi }}" class="img-preview" alt="Before"/>
-        <div class="img-label">Original Cropped ROI</div>
+        <div class="img-label">Original Analysis ROI</div>
       </div>
       <div class="col-md-6" style="text-align:center;">
         <img src="data:image/png;base64,{{ steps.final }}" class="img-preview" alt="After"/>
